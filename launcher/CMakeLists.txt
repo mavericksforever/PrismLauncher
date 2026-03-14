@@ -1412,6 +1412,8 @@ if(APPLE)
         "-framework Carbon"
         "-framework Foundation"
         "-framework ApplicationServices"
+        "-weak_framework UniformTypeIdentifiers"
+        bz2 lzma iconv xml2 z
     )
     if(Launcher_ENABLE_UPDATER)
         target_link_libraries(Launcher_logic ${SPARKLE_FRAMEWORK})

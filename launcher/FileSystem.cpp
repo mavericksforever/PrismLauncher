@@ -75,8 +75,8 @@
 #include <utime.h>
 #endif
 
-#include <filesystem>
-namespace fs = std::filesystem;
+#include <sys/stat.h>
+#include <unistd.h>
 
 // clone
 #if defined(Q_OS_LINUX)
@@ -307,7 +307,6 @@ void copyFolderAttributes(QString src, QString dst, QString relative)
  */
 bool copy::operator()(const QString& offset, bool dryRun)
 {
-    using copy_opts = fs::copy_options;
     m_copied = 0;  // reset counter
     m_failedPaths.clear();
 
@@ -319,19 +318,10 @@ bool copy::operator()(const QString& offset, bool dryRun)
     auto src = PathCombine(m_src.absolutePath(), offset);
     auto dst = PathCombine(m_dst.absolutePath(), offset);
 
-    std::error_code err;
-
-    fs::copy_options opt = copy_opts::none;
-
-    // The default behavior is to follow symlinks
-    if (!m_followSymlinks)
-        opt |= copy_opts::copy_symlinks;
-
-    if (m_overwrite)
-        opt |= copy_opts::overwrite_existing;
+    bool has_err = false;
 
     // Function that'll do the actual copying
-    auto copy_file = [this, dryRun, src, dst, opt, &err](QString src_path, QString relative_dst_path) {
+    auto copy_file = [this, dryRun, src, dst, &has_err](QString src_path, QString relative_dst_path) {
         if (m_matcher && (m_matcher(relative_dst_path) != m_whitelist))
             return;
 
@@ -341,15 +331,17 @@ bool copy::operator()(const QString& offset, bool dryRun)
 #ifdef Q_OS_WIN32
             copyFolderAttributes(src, dst, relative_dst_path);
 #endif
-            fs::copy(StringUtils::toStdString(src_path), StringUtils::toStdString(dst_path), opt, err);
-        }
-        if (err) {
-            qWarning() << "Failed to copy files:" << QString::fromStdString(err.message());
-            qDebug() << "Source file:" << src_path;
-            qDebug() << "Destination file:" << dst_path;
-            m_failedPaths.append(dst_path);
-            emit copyFailed(relative_dst_path);
-            return;
+            if (m_overwrite && QFile::exists(dst_path))
+                QFile::remove(dst_path);
+            if (!QFile::copy(src_path, dst_path)) {
+                qWarning() << "Failed to copy files";
+                qDebug() << "Source file:" << src_path;
+                qDebug() << "Destination file:" << dst_path;
+                m_failedPaths.append(dst_path);
+                emit copyFailed(relative_dst_path);
+                has_err = true;
+                return;
+            }
         }
         m_copied++;
         emit fileCopied(relative_dst_path);
@@ -369,10 +361,10 @@ bool copy::operator()(const QString& offset, bool dryRun)
     }
 
     // If the root src is not a directory, the previous iterator won't run.
-    if (!fs::is_directory(StringUtils::toStdString(src)))
+    if (!QFileInfo(src).isDir())
         copy_file(src, "");
 
-    return err.value() == 0;
+    return !has_err;
 }
 
 /// qDebug print support for the LinkPair struct
@@ -429,7 +421,7 @@ void create_link::make_link_list(const QString& offset)
             m_links_to_make.append(link);
         };
 
-        if ((!m_recursive) || !fs::is_directory(StringUtils::toStdString(src))) {
+        if ((!m_recursive) || !QFileInfo(src).isDir()) {
             if (m_debug)
                 qDebug() << "linking single file or dir:" << src << "to" << dst;
             link_file(src, "");
@@ -470,33 +462,29 @@ bool create_link::make_links()
         auto dst_path_std = StringUtils::toStdString(link.dst);
 
         ensureFilePathExists(dst_path);
+        int link_err = 0;
         if (m_useHardLinks) {
             if (m_debug)
                 qDebug() << "making hard link:" << src_path << "to" << dst_path;
-            fs::create_hard_link(src_path_std, dst_path_std, m_os_err);
-        } else if (fs::is_directory(src_path_std)) {
-            if (m_debug)
-                qDebug() << "making directory_symlink:" << src_path << "to" << dst_path;
-            fs::create_directory_symlink(src_path_std, dst_path_std, m_os_err);
+            link_err = ::link(src_path.toLocal8Bit().constData(), dst_path.toLocal8Bit().constData());
         } else {
             if (m_debug)
                 qDebug() << "making symlink:" << src_path << "to" << dst_path;
-            fs::create_symlink(src_path_std, dst_path_std, m_os_err);
+            link_err = ::symlink(src_path.toLocal8Bit().constData(), dst_path.toLocal8Bit().constData());
         }
 
-        if (m_os_err) {
-            qWarning() << "Failed to link files:" << QString::fromStdString(m_os_err.message());
+        if (link_err != 0) {
+            int saved_errno = errno;
+            qWarning() << "Failed to link files:" << strerror(saved_errno);
             qDebug() << "Source file:" << src_path;
             qDebug() << "Destination file:" << dst_path;
-            qDebug() << "Error category:" << m_os_err.category().name();
-            qDebug() << "Error code:" << m_os_err.value();
-            emit linkFailed(src_path, dst_path, QString::fromStdString(m_os_err.message()), m_os_err.value());
+            qDebug() << "Error code:" << saved_errno;
+            emit linkFailed(src_path, dst_path, QString::fromUtf8(strerror(saved_errno)), saved_errno);
+            return false;
         } else {
             m_linked++;
             emit fileLinked(src_path, dst_path);
         }
-        if (m_os_err)
-            return false;
     }
     return true;
 }
@@ -655,16 +643,14 @@ bool moveByCopy(const QString& source, const QString& dest)
 
 bool move(const QString& source, const QString& dest)
 {
-    std::error_code err;
-
     ensureFilePathExists(dest);
-    fs::rename(StringUtils::toStdString(source), StringUtils::toStdString(dest), err);
+    int rename_ret = ::rename(source.toLocal8Bit().constData(), dest.toLocal8Bit().constData());
 
-    if (err.value() != 0) {
+    if (rename_ret != 0) {
         if (moveByCopy(source, dest))
             return true;
         qDebug() << "Move of" << source << "to" << dest << "failed!";
-        qWarning() << "Failed to move file:" << QString::fromStdString(err.message()) << QString::number(err.value());
+        qWarning() << "Failed to move file:" << strerror(errno);
         return false;
     }
     return true;
@@ -672,15 +658,19 @@ bool move(const QString& source, const QString& dest)
 
 bool deletePath(QString path)
 {
-    std::error_code err;
-
-    fs::remove_all(StringUtils::toStdString(path), err);
-
-    if (err) {
-        qWarning() << "Failed to remove files:" << QString::fromStdString(err.message());
+    QFileInfo info(path);
+    if (info.isDir()) {
+        bool ok = QDir(path).removeRecursively();
+        if (!ok)
+            qWarning() << "Failed to remove directory:" << path;
+        return ok;
+    } else if (info.exists()) {
+        bool ok = QFile::remove(path);
+        if (!ok)
+            qWarning() << "Failed to remove file:" << path;
+        return ok;
     }
-
-    return err.value() == 0;
+    return true;
 }
 
 bool trash(QString path, QString* pathInTrash)
@@ -1136,23 +1126,25 @@ QString createShortcut(QString destination, QString target, QStringList args, QS
 
 bool overrideFolder(QString overwritten_path, QString override_path)
 {
-    using copy_opts = fs::copy_options;
-
     if (!FS::ensureFolderPathExists(overwritten_path))
         return false;
 
-    std::error_code err;
-    fs::copy_options opt = copy_opts::recursive | copy_opts::overwrite_existing;
-
-    // FIXME: hello traveller! Apparently std::copy does NOT overwrite existing files on GNU libstdc++ on Windows?
-    fs::copy(StringUtils::toStdString(override_path), StringUtils::toStdString(overwritten_path), opt, err);
-
-    if (err) {
-        qCritical() << QString("Failed to apply override from %1 to %2").arg(override_path, overwritten_path);
-        qCritical() << "Reason:" << QString::fromStdString(err.message());
+    bool ok = true;
+    QDirIterator it(override_path, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+    QDir src_dir(override_path);
+    while (it.hasNext()) {
+        auto src_file = it.next();
+        auto relative = src_dir.relativeFilePath(src_file);
+        auto dst_file = PathCombine(overwritten_path, relative);
+        ensureFilePathExists(dst_file);
+        if (QFile::exists(dst_file))
+            QFile::remove(dst_file);
+        if (!QFile::copy(src_file, dst_file)) {
+            qCritical() << QString("Failed to apply override from %1 to %2").arg(src_file, dst_file);
+            ok = false;
+        }
     }
-
-    return err.value() == 0;
+    return ok;
 }
 
 QString getFilesystemTypeName(FilesystemType type)
@@ -1321,7 +1313,7 @@ bool clone::operator()(const QString& offset, bool dryRun)
     }
 
     // If the root src is not a directory, the previous iterator won't run.
-    if (!fs::is_directory(StringUtils::toStdString(src)))
+    if (!QFileInfo(src).isDir())
         cloneFile(src, "");
 
     return err.value() == 0;
@@ -1636,13 +1628,12 @@ bool canLink(const QString& src, const QString& dst)
 
 uintmax_t hardLinkCount(const QString& path)
 {
-    std::error_code err;
-    int count = fs::hard_link_count(StringUtils::toStdString(path), err);
-    if (err) {
-        qWarning() << "Failed to count hard links for" << path << ":" << QString::fromStdString(err.message());
-        count = 0;
+    struct stat st;
+    if (::stat(path.toLocal8Bit().constData(), &st) != 0) {
+        qWarning() << "Failed to count hard links for" << path << ":" << strerror(errno);
+        return 0;
     }
-    return count;
+    return st.st_nlink;
 }
 
 #ifdef Q_OS_WIN

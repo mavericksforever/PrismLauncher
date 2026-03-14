@@ -40,9 +40,6 @@
 #include <QProgressDialog>
 #include <memory>
 
-#include <filesystem>
-namespace fs = std::filesystem;
-
 #include "DesktopServices.h"
 
 #include "updater/prismupdater/UpdaterDialogs.h"

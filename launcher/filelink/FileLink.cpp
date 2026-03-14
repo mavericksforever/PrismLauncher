@@ -34,8 +34,8 @@
 
 #include <DesktopServices.h>
 
-#include <filesystem>
-namespace fs = std::filesystem;
+#include <sys/stat.h>
+#include <unistd.h>
 
 FileLinkApp::FileLinkApp(int& argc, char** argv) : QCoreApplication(argc, argv), socket(new QLocalSocket(this))
 {
@@ -124,25 +124,23 @@ void FileLinkApp::runLink()
         QString dst_path = link.dst;
 
         FS::ensureFilePathExists(dst_path);
+        int link_err = 0;
         if (m_useHardLinks) {
             qDebug() << "making hard link:" << src_path << "to" << dst_path;
-            fs::create_hard_link(StringUtils::toStdString(src_path), StringUtils::toStdString(dst_path), os_err);
-        } else if (fs::is_directory(StringUtils::toStdString(src_path))) {
-            qDebug() << "making directory_symlink:" << src_path << "to" << dst_path;
-            fs::create_directory_symlink(StringUtils::toStdString(src_path), StringUtils::toStdString(dst_path), os_err);
+            link_err = ::link(src_path.toLocal8Bit().constData(), dst_path.toLocal8Bit().constData());
         } else {
             qDebug() << "making symlink:" << src_path << "to" << dst_path;
-            fs::create_symlink(StringUtils::toStdString(src_path), StringUtils::toStdString(dst_path), os_err);
+            link_err = ::symlink(src_path.toLocal8Bit().constData(), dst_path.toLocal8Bit().constData());
         }
 
-        if (os_err) {
-            qWarning() << "Failed to link files:" << QString::fromStdString(os_err.message());
+        if (link_err != 0) {
+            int saved_errno = errno;
+            qWarning() << "Failed to link files:" << strerror(saved_errno);
             qDebug() << "Source file:" << src_path;
             qDebug() << "Destination file:" << dst_path;
-            qDebug() << "Error category:" << os_err.category().name();
-            qDebug() << "Error code:" << os_err.value();
+            qDebug() << "Error code:" << saved_errno;
 
-            FS::LinkResult result = { src_path, dst_path, QString::fromStdString(os_err.message()), os_err.value() };
+            FS::LinkResult result = { src_path, dst_path, QString::fromUtf8(strerror(saved_errno)), saved_errno };
             m_path_results.append(result);
         } else {
             FS::LinkResult result = { src_path, dst_path, "", 0 };
