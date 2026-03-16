@@ -570,6 +570,14 @@ QStringList MinecraftInstance::javaArguments()
 
     args << "-Duser.language=en";
 
+    // HACK: fix LWJGL crash on macOS 10.9 (Mavericks) where CFStringGetLength
+    // receives null in nGetCurrentDisplayMode when AWT is in headless mode
+#ifdef Q_OS_MAC
+    if (QOperatingSystemVersion::current() < QOperatingSystemVersion::OSXYosemite) {
+        args << "-Djava.awt.headless=false";
+    }
+#endif
+
     // custom args go first. we want to override them if we have our own here.
     args.append(extraArguments());
 
