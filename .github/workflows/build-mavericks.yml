@@ -99,6 +99,7 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.DEPLOYMENT_TARGET }} \
+            -DCMAKE_INSTALL_PREFIX=/tmp/prismlauncher \
             -DCMAKE_PREFIX_PATH="/tmp/qt6-mavericks;/tmp/deps;$(brew --prefix extra-cmake-modules)" \
             -DQT_HOST_PATH=/tmp/qt6-host \
             -DLibArchive_INCLUDE_DIR=/tmp/deps/include \
@@ -116,7 +117,7 @@ jobs:
       - name: Deploy
         run: |
           # Install without Qt's built-in deploy (skip errors from macdeployqt)
-          cmake --install build --prefix /tmp/prismlauncher 2>&1 || true
+          cmake --install build 2>&1 || true
           APP="/tmp/prismlauncher/PrismLauncher.app"
 
           # Remove any host Qt frameworks that cmake --install may have copied
