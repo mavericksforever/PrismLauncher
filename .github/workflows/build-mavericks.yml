@@ -115,20 +115,22 @@ jobs:
 
       - name: Deploy
         run: |
-          cmake --install build --prefix /tmp/prismlauncher 2>&1 | grep -v "error.*install_name_tool\|Could not resolve" || true
+          # Install without Qt's built-in deploy (skip errors from macdeployqt)
+          cmake --install build --prefix /tmp/prismlauncher 2>&1 || true
           APP="/tmp/prismlauncher/PrismLauncher.app"
 
-          # macdeployqt for structure
-          /tmp/qt6-host/bin/macdeployqt "$APP" -libpath=/tmp/qt6-mavericks/lib 2>/dev/null || true
+          # Remove any host Qt frameworks that cmake --install may have copied
+          rm -rf "$APP/Contents/Frameworks"/Qt*.framework
+          rm -rf "$APP/Contents/PlugIns"
 
-          # Replace with target Qt frameworks
+          # Copy target Qt frameworks (x86_64, 10.9, with macports-legacy-support)
+          mkdir -p "$APP/Contents/Frameworks"
           for fw in QtCore QtGui QtWidgets QtNetwork QtDBus QtConcurrent QtXml QtOpenGL QtNetworkAuth QtSvg QtSvgWidgets; do
-            rm -rf "$APP/Contents/Frameworks/${fw}.framework"
             [ -d "/tmp/qt6-mavericks/lib/${fw}.framework" ] && \
               cp -R "/tmp/qt6-mavericks/lib/${fw}.framework" "$APP/Contents/Frameworks/"
           done
 
-          # Replace with target Qt plugins
+          # Copy target Qt plugins
           for dir in platforms styles imageformats networkinformation tls; do
             [ -d "/tmp/qt6-mavericks/plugins/$dir" ] || continue
             mkdir -p "$APP/Contents/PlugIns/$dir"
@@ -138,6 +140,9 @@ jobs:
                 "$APP/Contents/PlugIns/$dir/$(basename $p)" 2>/dev/null || true
             done
           done
+
+          # Ensure qt.conf points to PlugIns
+          echo -e "[Paths]\nPlugins = PlugIns" > "$APP/Contents/Resources/qt.conf"
 
           # Create DMG
           hdiutil create -volname "Prism Launcher" -srcfolder "$APP" \
