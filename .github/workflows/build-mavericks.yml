@@ -1,0 +1,182 @@
+name: Build PrismLauncher for macOS 10.9 Mavericks
+
+on:
+  push:
+    branches: [develop]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  QT_VERSION: "6.8.3"
+  DEPLOYMENT_TARGET: "10.9"
+
+jobs:
+  build:
+    name: Build PrismLauncher (x86_64, 10.9)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install tools
+        run: brew install ccache ninja extra-cmake-modules
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: prism-ccache-${{ hashFiles('launcher/**', 'libraries/**') }}
+          restore-keys: prism-ccache-
+
+      - name: Download Qt SDK
+        run: |
+          # Download from mavericksforever/qtbase release
+          gh release download v${{ env.QT_VERSION }}-mavericks \
+            --repo mavericksforever/qtbase \
+            --pattern "qt6-mavericks-x86_64.tar.gz" \
+            --pattern "qt6-host-arm64.tar.gz" \
+            --dir /tmp
+          tar xzf /tmp/qt6-mavericks-x86_64.tar.gz -C /tmp
+          tar xzf /tmp/qt6-host-arm64.tar.gz -C /tmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: /tmp/deps
+          key: prism-deps-v2
+
+      - name: Build dependencies
+        run: |
+          mkdir -p /tmp/deps
+          # cmark
+          if [ ! -f /tmp/deps/lib/libcmark.a ]; then
+            git clone --depth 1 https://github.com/commonmark/cmark.git /tmp/cmark
+            cmake -S /tmp/cmark -B /tmp/cmark/build -G Ninja \
+              -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.DEPLOYMENT_TARGET }} \
+              -DCMAKE_INSTALL_PREFIX=/tmp/deps
+            cmake --build /tmp/cmark/build --parallel
+            cmake --install /tmp/cmark/build
+          fi
+          # qrencode
+          if [ ! -f /tmp/deps/lib/libqrencode.a ]; then
+            git clone --depth 1 https://github.com/fukuchi/libqrencode.git /tmp/qrencode
+            cmake -S /tmp/qrencode -B /tmp/qrencode/build -G Ninja \
+              -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.DEPLOYMENT_TARGET }} \
+              -DCMAKE_INSTALL_PREFIX=/tmp/deps \
+              -DWITH_TOOLS=OFF -DWITH_TESTS=OFF \
+              -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            cmake --build /tmp/qrencode/build --parallel
+            cmake --install /tmp/qrencode/build
+          fi
+          # tomlplusplus
+          if [ ! -f /tmp/deps/lib/cmake/tomlplusplus/tomlplusplusConfig.cmake ]; then
+            git clone --depth 1 https://github.com/marzer/tomlplusplus.git /tmp/toml
+            cmake -S /tmp/toml -B /tmp/toml/build -G Ninja -DCMAKE_INSTALL_PREFIX=/tmp/deps
+            cmake --install /tmp/toml/build
+          fi
+          # libarchive (static, without openat/futimens for 10.9)
+          if [ ! -f /tmp/deps/lib/libarchive.a ]; then
+            curl -sL https://github.com/libarchive/libarchive/releases/download/v3.7.4/libarchive-3.7.4.tar.xz | tar xJ -C /tmp
+            cd /tmp/libarchive-3.7.4
+            CFLAGS="-arch x86_64 -mmacosx-version-min=${{ env.DEPLOYMENT_TARGET }}" \
+            LDFLAGS="-arch x86_64 -mmacosx-version-min=${{ env.DEPLOYMENT_TARGET }}" \
+            ./configure --prefix=/tmp/deps \
+              --enable-static --disable-shared \
+              --without-lzo2 --without-nettle --without-openssl \
+              --disable-bsdtar --disable-bsdcpio --disable-bsdcat --disable-bsdunzip \
+              ac_cv_func_openat=no ac_cv_func_futimens=no ac_cv_func_utimensat=no
+            make -j$(sysctl -n hw.ncpu)
+            make install
+          fi
+
+      - name: Configure PrismLauncher
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.DEPLOYMENT_TARGET }} \
+            -DCMAKE_PREFIX_PATH="/tmp/qt6-mavericks;/tmp/deps;$(brew --prefix extra-cmake-modules)" \
+            -DQT_HOST_PATH=/tmp/qt6-host \
+            -DLibArchive_INCLUDE_DIR=/tmp/deps/include \
+            -DLibArchive_LIBRARY=/tmp/deps/lib/libarchive.a \
+            -DBUILD_TESTING=OFF \
+            -DMACOSX_SPARKLE_UPDATE_PUBLIC_KEY="" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -Wno-dev
+
+      - name: Build PrismLauncher
+        run: cmake --build build --parallel
+
+      - name: Deploy
+        run: |
+          cmake --install build --prefix /tmp/prismlauncher 2>&1 | grep -v "error.*install_name_tool\|Could not resolve" || true
+          APP="/tmp/prismlauncher/PrismLauncher.app"
+
+          # macdeployqt for structure
+          /tmp/qt6-host/bin/macdeployqt "$APP" -libpath=/tmp/qt6-mavericks/lib 2>/dev/null || true
+
+          # Replace with target Qt frameworks
+          for fw in QtCore QtGui QtWidgets QtNetwork QtDBus QtConcurrent QtXml QtOpenGL QtNetworkAuth QtSvg QtSvgWidgets; do
+            rm -rf "$APP/Contents/Frameworks/${fw}.framework"
+            [ -d "/tmp/qt6-mavericks/lib/${fw}.framework" ] && \
+              cp -R "/tmp/qt6-mavericks/lib/${fw}.framework" "$APP/Contents/Frameworks/"
+          done
+
+          # Replace with target Qt plugins
+          for dir in platforms styles imageformats networkinformation tls; do
+            [ -d "/tmp/qt6-mavericks/plugins/$dir" ] || continue
+            mkdir -p "$APP/Contents/PlugIns/$dir"
+            for p in /tmp/qt6-mavericks/plugins/$dir/*.dylib; do
+              cp "$p" "$APP/Contents/PlugIns/$dir/"
+              install_name_tool -add_rpath @loader_path/../../Frameworks \
+                "$APP/Contents/PlugIns/$dir/$(basename $p)" 2>/dev/null || true
+            done
+          done
+
+          # Create DMG
+          hdiutil create -volname "Prism Launcher" -srcfolder "$APP" \
+            -ov -format UDZO -fs HFS+ build/PrismLauncher-mavericks.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrismLauncher-mavericks
+          path: build/PrismLauncher-mavericks.dmg
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PrismLauncher for macOS 10.9 Mavericks
+          body: |
+            ## PrismLauncher — macOS 10.9 Mavericks
+
+            Minecraft launcher for macOS 10.9 (Mavericks) and newer.
+            Built with [Qt 6.8.3 Mavericks port](https://github.com/mavericksforever/qtbase).
+
+            ### Installation
+            1. Download the DMG
+            2. Drag to Applications
+            3. Launch and enjoy Minecraft on your vintage Mac!
+
+            ### Notes
+            - Requires Java 8 for Minecraft 1.12 and below
+            - `-Djava.awt.headless=false` is automatically set for LWJGL compatibility
+          files: |
+            PrismLauncher-mavericks/PrismLauncher-mavericks.dmg
