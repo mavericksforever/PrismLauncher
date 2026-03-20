@@ -36,6 +36,7 @@
 #include "meta/VersionList.h"
 #include "minecraft/MinecraftInstance.h"
 #include "minecraft/PackProfile.h"
+#include "java/download/GitHubJavaDownloader.h"
 #include "tasks/SequentialTask.h"
 #include "ui/dialogs/CustomMessageBox.h"
 #include "ui/dialogs/ProgressDialog.h"
@@ -47,8 +48,9 @@ class InstallJavaPage : public QWidget, public BasePage {
    public:
     Q_OBJECT
    public:
-    explicit InstallJavaPage(const QString& id, const QString& iconName, const QString& name, QWidget* parent = nullptr)
-        : QWidget(parent), uid(id), iconName(iconName), name(name)
+    explicit InstallJavaPage(const QString& id, const QString& iconName, const QString& name,
+                             BaseVersionList* customList = nullptr, QWidget* parent = nullptr)
+        : QWidget(parent), uid(id), iconName(iconName), name(name), m_customList(customList)
     {
         setObjectName(QStringLiteral("VersionSelectWidget"));
         horizontalLayout = new QHBoxLayout(this);
@@ -86,12 +88,15 @@ class InstallJavaPage : public QWidget, public BasePage {
 
     void setSelectedVersion(BaseVersion::Ptr version)
     {
-        auto dcast = std::dynamic_pointer_cast<Meta::Version>(version);
-        if (!dcast) {
+        if (auto ghMajor = std::dynamic_pointer_cast<Java::GitHubMajorVersion>(version)) {
+            javaVersionSelect->initialize(new Java::GitHubReleaseVersionList(ghMajor, this));
+            javaVersionSelect->selectCurrent();
             return;
         }
-        javaVersionSelect->initialize(new Java::VersionList(dcast, this));
-        javaVersionSelect->selectCurrent();
+        if (auto metaVer = std::dynamic_pointer_cast<Meta::Version>(version)) {
+            javaVersionSelect->initialize(new Java::VersionList(metaVer, this));
+            javaVersionSelect->selectCurrent();
+        }
     }
 
     QString id() const override { return uid; }
@@ -103,11 +108,14 @@ class InstallJavaPage : public QWidget, public BasePage {
         if (loaded)
             return;
 
-        const auto versions = APPLICATION->metadataIndex()->get(uid);
-        if (!versions)
-            return;
-
-        initialize(versions);
+        if (m_customList) {
+            majorVersionSelect->initialize(m_customList);
+        } else {
+            const auto versions = APPLICATION->metadataIndex()->get(uid);
+            if (!versions)
+                return;
+            initialize(versions);
+        }
         loaded = true;
     }
 
@@ -157,6 +165,7 @@ class InstallJavaPage : public QWidget, public BasePage {
     QHBoxLayout* horizontalLayout = nullptr;
     VersionSelectWidget* majorVersionSelect = nullptr;
     VersionSelectWidget* javaVersionSelect = nullptr;
+    BaseVersionList* m_customList = nullptr;
 
     QStringList m_recommended_majors;
     bool m_recommend;
@@ -282,6 +291,9 @@ InstallDialog::InstallDialog(const QString& uid, BaseInstance* instance, QWidget
 QList<BasePage*> InstallDialog::getPages()
 {
     return {
+        // Mavericks JBR (Java 25 for macOS 10.9)
+        new InstallJavaPage("mavericks.jbr", "java", tr("Mavericks JBR"),
+            new Java::GitHubMajorVersionList("mavericksforever", "JetBrainsRuntime", this)),
         // Mojang
         new InstallJavaPage("net.minecraft.java", "mojang", tr("Mojang")),
         // Adoptium

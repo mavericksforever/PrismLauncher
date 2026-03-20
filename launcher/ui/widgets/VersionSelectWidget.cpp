@@ -130,6 +130,8 @@ void VersionSelectWidget::closeEvent(QCloseEvent* event)
 void VersionSelectWidget::loadList()
 {
     m_load_task = m_vlist->getLoadTask();
+    if (!m_load_task)
+        return;
     connect(m_load_task.get(), &Task::succeeded, this, &VersionSelectWidget::onTaskSucceeded);
     connect(m_load_task.get(), &Task::failed, this, &VersionSelectWidget::onTaskFailed);
     connect(m_load_task.get(), &Task::progress, this, &VersionSelectWidget::changeProgress);
