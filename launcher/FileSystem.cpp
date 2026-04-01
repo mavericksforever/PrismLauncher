@@ -944,7 +944,7 @@ QString createShortcut(QString destination, QString target, QStringList args, QS
         return QString();
     }
     if (!info.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Failed to open file" << info.fileName() << "for writing!";
+        qWarning() << "Failed to open file" << info.fileName() << "for writing:" << info.errorString();
         return QString();
     }
 
@@ -955,7 +955,7 @@ QString createShortcut(QString destination, QString target, QStringList args, QS
 
     QFile f(exec);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Failed to open file" << f.fileName() << "for writing!";
+        qWarning() << "Failed to open file" << f.fileName() << "for writing:" << f.errorString();
         return QString();
     }
     QTextStream stream(&f);
@@ -1000,7 +1000,7 @@ QString createShortcut(QString destination, QString target, QStringList args, QS
         destination += ".desktop";
     QFile f(destination);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qWarning() << "Failed to open file '" << f.fileName() << "' for writing!";
+        qWarning() << "Failed to open file" << f.fileName() << "for writing:" << f.errorString();
         return QString();
     }
     QTextStream stream(&f);
