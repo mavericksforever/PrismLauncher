@@ -97,6 +97,12 @@
 #include <QStandardPaths>
 #include <QWindow>
 
+#ifdef Q_OS_MACOS
+#include <QCoreApplication>
+#include <QFileInfo>
+#include <QOperatingSystemVersion>
+#endif
+
 #ifdef Q_OS_LINUX
 #include "LibraryUtils.h"
 #endif
@@ -578,6 +584,19 @@ QStringList MinecraftInstance::javaArguments()
 #ifdef Q_OS_MAC
     if (QOperatingSystemVersion::current() < QOperatingSystemVersion::OSXYosemite) {
         args << "-Djava.awt.headless=false";
+    }
+    // On old macOS, load the rcs-agent JVMTI agent. It hooks dlopen() for every
+    // native the JVM loads (LWJGL, netty, any JNI library) and rewrites those binding
+    // post-10.9 symbols to the compatibility shim (rcs.dylib), which reexports the
+    // real system libraries and adds the missing symbols. One generic mechanism — no
+    // per-native patching, no LWJGL libname overrides — and it covers future natives
+    // automatically. Both dylibs are bundled only in the mavericks build.
+    if (QOperatingSystemVersion::current() < QOperatingSystemVersion(QOperatingSystemVersion::MacOS, 10, 15)) {
+        const QString res = FS::PathCombine(QCoreApplication::applicationDirPath(), "../Resources");
+        const QString agent = FS::PathCombine(res, "rcs-agent.dylib");
+        const QString rcs = FS::PathCombine(res, "rcs.dylib");
+        if (QFileInfo::exists(agent) && QFileInfo::exists(rcs))
+            args << QStringLiteral("-agentpath:%1=%2").arg(agent, rcs);
     }
 #endif
 

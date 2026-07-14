@@ -94,6 +94,21 @@ jobs:
             make install
           fi
 
+      - name: Download compat shim + agent
+        run: |
+          # rcs.dylib: redirect shim that reexports the real system libraries and adds
+          # the symbols missing on 10.9. rcs-agent.dylib: a JVMTI agent that hooks
+          # dlopen() at runtime and rewrites every third-party native binding those
+          # symbols to point at rcs.dylib. Both are built and released by the
+          # redlance-compat-shims repo; the launcher loads the agent via -agentpath.
+          gh release download \
+            --repo mavericksforever/redlance-compat-shims \
+            --pattern "rcs-x86_64.dylib" \
+            --pattern "rcs-agent-x86_64.dylib" \
+            --dir /tmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Configure PrismLauncher
         run: |
           # -Wl,-no_weak_imports fails the link the moment our own code references a
@@ -151,6 +166,12 @@ jobs:
 
           # Ensure qt.conf points to PlugIns
           echo -e "[Paths]\nPlugins = PlugIns" > "$APP/Contents/Resources/qt.conf"
+
+          # Bundle the compat shim + the JVMTI agent. On old macOS the launcher loads
+          # the agent (-agentpath), which hooks dlopen() and redirects every native
+          # binding post-10.9 symbols to rcs.dylib sitting right next to it.
+          cp /tmp/rcs-x86_64.dylib       "$APP/Contents/Resources/rcs.dylib"
+          cp /tmp/rcs-agent-x86_64.dylib "$APP/Contents/Resources/rcs-agent.dylib"
 
           # Create DMG
           hdiutil create -volname "Prism Launcher" -srcfolder "$APP" \
