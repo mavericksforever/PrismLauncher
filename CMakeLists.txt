@@ -13,6 +13,10 @@ endif()
 ##################################### Set CMake options #####################################
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTOGEN_ORIGIN_DEPENDS OFF)
+set(CMAKE_GLOBAL_AUTOGEN_TARGET ON)
+set(CMAKE_GLOBAL_AUTORCC_TARGET ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake/")
@@ -179,7 +183,7 @@ set(Launcher_LOGIN_CALLBACK_URL "https://prismlauncher.org/successful-login" CAC
 set(Launcher_LEGACY_FMLLIBS_BASE_URL "https://files.prismlauncher.org/fmllibs/" CACHE STRING "URL for legacy (<=1.5.2) FML Libraries.")
 
 ######## Set version numbers ########
-set(Launcher_VERSION_MAJOR 11)
+set(Launcher_VERSION_MAJOR 12)
 set(Launcher_VERSION_MINOR 0)
 set(Launcher_VERSION_PATCH 0)
 

@@ -40,6 +40,7 @@
 #include "minecraft/auth/AccountData.h"
 #include "minecraft/auth/AccountList.h"
 
+#include "net/NetUtils.h"
 #include "ui/InstanceWindow.h"
 #include "ui/dialogs/CustomMessageBox.h"
 #include "ui/dialogs/MSALoginDialog.h"
@@ -50,7 +51,7 @@
 #include <QInputDialog>
 #include <QList>
 #include <QPushButton>
-#include <QRegularExpression>
+#include <utility>
 
 #include "BuildConfig.h"
 #include "JavaCommon.h"
@@ -82,9 +83,9 @@ void LaunchController::decideAccount()
     }
 
     // Select the account to use. If the instance has a specific account set, that will be used. Otherwise, the default account will be used
-    auto accounts = APPLICATION->accounts();
-    auto instanceAccountId = m_instance->settings()->get("InstanceAccountId").toString();
-    auto instanceAccountIndex = accounts->findAccountByProfileId(instanceAccountId);
+    auto* accounts = APPLICATION->accounts();
+    const auto instanceAccountId = m_instance->settings()->get("InstanceAccountId").toString();
+    const auto instanceAccountIndex = accounts->findAccountByProfileId(instanceAccountId);
     if (instanceAccountIndex == -1 || instanceAccountId.isEmpty()) {
         m_accountToUse = accounts->defaultAccount();
     } else {
@@ -109,7 +110,7 @@ void LaunchController::decideAccount()
         }
     }
 
-    if (!m_accountToUse) {
+    if (!m_accountToUse && accounts->anyAccountIsValid()) {
         // If no default account is set, ask the user which one to use.
         ProfileSelectDialog selectDialog(tr("Which account would you like to use?"), ProfileSelectDialog::GlobalDefaultCheckbox,
                                          m_parentWidget);
@@ -133,15 +134,7 @@ LaunchDecision LaunchController::decideLaunchMode()
         return LaunchDecision::Continue;
     }
 
-    if (m_wantedLaunchMode == LaunchMode::Normal) {
-        if (m_accountToUse->shouldRefresh() || m_accountToUse->accountState() == AccountState::Offline) {
-            // Force account refresh on the account used to launch the instance updating the AccountState
-            // only on first try and if it is not meant to be offline
-            m_accountToUse->refresh();
-        }
-    }
-
-    const auto accounts = APPLICATION->accounts();
+    const auto* accounts = APPLICATION->accounts();
     MinecraftAccountPtr accountToCheck = nullptr;
 
     if (m_accountToUse->accountType() != AccountType::Offline) {
@@ -163,7 +156,9 @@ LaunchDecision LaunchController::decideLaunchMode()
     }
 
     auto state = accountToCheck->accountState();
-    if (state == AccountState::Unchecked || state == AccountState::Errored) {
+    const bool needsRefresh =
+        m_wantedLaunchMode == LaunchMode::Normal && (state == AccountState::Offline || accountToCheck->shouldRefresh());
+    if (state == AccountState::Unchecked || state == AccountState::Errored || needsRefresh) {
         accountToCheck->refresh();
         state = AccountState::Working;
     }
@@ -213,7 +208,7 @@ LaunchDecision LaunchController::decideLaunchMode()
     return LaunchDecision::Abort;
 }
 
-bool LaunchController::askPlayDemo()
+bool LaunchController::askPlayDemo() const
 {
     QMessageBox box(m_parentWidget);
     box.setWindowTitle(tr("Play demo?"));
@@ -223,21 +218,22 @@ bool LaunchController::askPlayDemo()
     text += tr("\n\nDo you want to play the demo?");
     box.setText(text);
     box.setIcon(QMessageBox::Warning);
-    auto demoButton = box.addButton(tr("Play Demo"), QMessageBox::ButtonRole::YesRole);
-    auto cancelButton = box.addButton(tr("Cancel"), QMessageBox::ButtonRole::NoRole);
+    const auto* demoButton = box.addButton(tr("Play Demo"), QMessageBox::ButtonRole::YesRole);
+    auto* cancelButton = box.addButton(tr("Cancel"), QMessageBox::ButtonRole::NoRole);
     box.setDefaultButton(cancelButton);
 
     box.exec();
     return box.clickedButton() == demoButton;
 }
 
-QString LaunchController::askOfflineName(QString playerName, bool* ok)
+QString LaunchController::askOfflineName(const QString& playerName, bool* ok)
 {
     if (ok != nullptr) {
         *ok = false;
     }
 
-    QString message;
+    QString title, message;
+    title = tr("Player name");
     switch (m_actualLaunchMode) {
         case LaunchMode::Normal:
             Q_ASSERT(false);
@@ -247,17 +243,24 @@ QString LaunchController::askOfflineName(QString playerName, bool* ok)
             break;
         case LaunchMode::Offline:
             if (m_wantedLaunchMode == LaunchMode::Normal) {
-                message = tr("You are not connected to the Internet, launching in offline mode\n\n");
+                auto netErr = m_accountToUse->accountData()->networkError;
+                if (Net::isServerError(netErr)) {
+                    title = tr("Auth servers offline");
+                    message = tr("The Minecraft authentication servers are currently unavailable, launching in offline mode.\n\n");
+                } else {
+                    title = tr("No internet connection");
+                    message = tr("You are not connected to the Internet, launching in offline mode.\n\n");
+                }
             }
             message += tr("Choose your offline mode player name");
             break;
     }
 
-    QString lastOfflinePlayerName = APPLICATION->settings()->get("LastOfflinePlayerName").toString();
+    const QString lastOfflinePlayerName = APPLICATION->settings()->get("LastOfflinePlayerName").toString();
     QString usedname = lastOfflinePlayerName.isEmpty() ? playerName : lastOfflinePlayerName;
 
     ChooseOfflineNameDialog dialog(message, m_parentWidget);
-    dialog.setWindowTitle(tr("Player name"));
+    dialog.setWindowTitle(title);
     dialog.setUsername(usedname);
     if (dialog.exec() != QDialog::Accepted) {
         return {};
@@ -331,23 +334,24 @@ void LaunchController::login()
     launchInstance();
 }
 
-bool LaunchController::reauthenticateAccount(MinecraftAccountPtr account, QString reason)
+bool LaunchController::reauthenticateAccount(const MinecraftAccountPtr& account, const QString& reason)
 {
     auto button = QMessageBox::warning(
         m_parentWidget, tr("Account refresh failed"), tr("%1. Do you want to reauthenticate this account?").arg(reason),
         QMessageBox::StandardButton::Yes | QMessageBox::StandardButton::No, QMessageBox::StandardButton::Yes);
     if (button == QMessageBox::StandardButton::Yes) {
-        auto accounts = APPLICATION->accounts();
-        bool isDefault = accounts->defaultAccount() == account;
-        accounts->removeAccount(accounts->index(accounts->findAccountByProfileId(account->profileId())));
+        auto* accounts = APPLICATION->accounts();
+        const bool isDefault = accounts->defaultAccount() == account;
         if (account->accountType() == AccountType::MSA) {
             auto newAccount = MSALoginDialog::newAccount(m_parentWidget);
 
             if (newAccount != nullptr) {
+                accounts->removeAccount(accounts->index(accounts->findAccountByProfileId(account->profileId())));
                 accounts->addAccount(newAccount);
 
-                if (isDefault)
+                if (isDefault) {
                     accounts->setDefaultAccount(newAccount);
+                }
 
                 if (m_accountToUse == account) {
                     m_accountToUse = nullptr;
@@ -358,14 +362,13 @@ bool LaunchController::reauthenticateAccount(MinecraftAccountPtr account, QStrin
         }
     }
 
-    emitFailed(reason);
     return false;
 }
 
 void LaunchController::launchInstance()
 {
-    Q_ASSERT_X(m_instance != NULL, "launchInstance", "instance is NULL");
-    Q_ASSERT_X(m_session.get() != nullptr, "launchInstance", "session is NULL");
+    Q_ASSERT(m_instance != nullptr);
+    Q_ASSERT(m_session.get() != nullptr);
 
     if (!m_instance->reloadSettings()) {
         QMessageBox::critical(m_parentWidget, tr("Error!"), tr("Couldn't load the instance profile."));
@@ -379,8 +382,8 @@ void LaunchController::launchInstance()
         return;
     }
 
-    auto console = qobject_cast<InstanceWindow*>(m_parentWidget);
-    auto showConsole = m_instance->settings()->get("ShowConsole").toBool();
+    const auto* console = qobject_cast<InstanceWindow*>(m_parentWidget);
+    const auto showConsole = m_instance->settings()->get("ShowConsole").toBool();
     if (!console && showConsole) {
         APPLICATION->showInstanceWindow(m_instance);
     }
@@ -395,7 +398,7 @@ void LaunchController::launchInstance()
         online_mode = "online";
 
         // Prepend Server Status
-        QStringList servers = { "login.microsoftonline.com", "session.minecraft.net", "textures.minecraft.net", "api.mojang.com" };
+        const QStringList servers = { "login.microsoftonline.com", "session.minecraft.net", "textures.minecraft.net", "api.mojang.com" };
 
         m_launcher->prependStep(makeShared<PrintServers>(m_launcher, servers));
     } else {
@@ -465,10 +468,10 @@ void LaunchController::onFailed(QString reason)
     if (m_instance->settings()->get("ShowConsoleOnError").toBool()) {
         APPLICATION->showInstanceWindow(m_instance, "console");
     }
-    emitFailed(reason);
+    emitFailed(std::move(reason));
 }
 
-void LaunchController::onProgressRequested(Task* task)
+void LaunchController::onProgressRequested(Task* task) const
 {
     ProgressDialog progDialog(m_parentWidget);
     progDialog.setSkipButton(true, tr("Abort"));

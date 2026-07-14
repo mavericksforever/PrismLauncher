@@ -105,6 +105,7 @@
 #include "ui/dialogs/NewInstanceDialog.h"
 #include "ui/dialogs/NewsDialog.h"
 #include "ui/dialogs/ProgressDialog.h"
+#include "ui/dialogs/skins/SkinManageDialog.h"
 #include "ui/instanceview/InstanceDelegate.h"
 #include "ui/instanceview/InstanceProxyModel.h"
 #include "ui/instanceview/InstanceView.h"
@@ -180,7 +181,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         ui->instanceToolBar->insertSeparator(ui->actionLaunchInstance);
 
         // restore the instance toolbar settings
-        auto const setting_name = QString("WideBarVisibility_%1").arg(ui->instanceToolBar->objectName());
+        const auto setting_name = QString("WideBarVisibility_%1").arg(ui->instanceToolBar->objectName());
         instanceToolbarSetting = APPLICATION->settings()->getOrRegisterSetting(setting_name);
 
         ui->instanceToolBar->setVisibilityState(QByteArray::fromBase64(instanceToolbarSetting->get().toString().toUtf8()));
@@ -396,6 +397,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
     // Shouldn't have to use lambdas here like this, but if I don't, the compiler throws a fit.
     // Template hell sucks...
     connect(APPLICATION->accounts(), &AccountList::defaultAccountChanged, [this] { defaultAccountChanged(); });
+    connect(APPLICATION->accounts(), &AccountList::listActivityChanged, [this] { defaultAccountChanged(); });
     connect(APPLICATION->accounts(), &AccountList::listChanged, [this] { defaultAccountChanged(); });
 
     // Show initial account
@@ -653,6 +655,9 @@ void MainWindow::repopulateAccountsMenu()
 
     auto accounts = APPLICATION->accounts();
     MinecraftAccountPtr defaultAccount = accounts->defaultAccount();
+    
+    bool canChangeSkin = defaultAccount && (defaultAccount->accountType() == AccountType::MSA) && !defaultAccount->isActive();
+    ui->actionManageSkins->setEnabled(canChangeSkin);
 
     QString active_profileId = "";
     if (defaultAccount) {
@@ -709,6 +714,7 @@ void MainWindow::repopulateAccountsMenu()
     connect(ui->actionNoDefaultAccount, &QAction::triggered, this, &MainWindow::changeActiveAccount);
 
     ui->accountsMenu->addSeparator();
+    ui->accountsMenu->addAction(ui->actionManageSkins);
     ui->accountsMenu->addAction(ui->actionManageAccounts);
 
     accountsButtonMenu->addActions(ui->accountsMenu->actions());
@@ -931,6 +937,9 @@ void MainWindow::processURLs(QList<QUrl> urls)
 {
     // NOTE: This loop only processes one dropped file!
     for (auto& url : urls) {
+        if (url.isEmpty() || url.toString().trimmed().isEmpty())
+            continue;
+
         qDebug() << "Processing" << url;
 
         // The isLocalFile() check below doesn't work as intended without an explicit scheme.
@@ -942,9 +951,7 @@ void MainWindow::processURLs(QList<QUrl> urls)
         QUrl local_url;
         if (!url.isLocalFile()) {  // download the remote resource and identify
 
-            const bool isExternalURLImport =
-                (url.host().toLower() == "import") ||
-                (url.path().startsWith("/import", Qt::CaseInsensitive));
+            const bool isExternalURLImport = (url.host().toLower() == "import") || (url.path().startsWith("/import", Qt::CaseInsensitive));
 
             QUrl dl_url;
             if (url.scheme() == "curseforge" || (url.scheme() == BuildConfig.LAUNCHER_APP_BINARY_NAME && url.host() == "install")) {
@@ -952,7 +959,7 @@ void MainWindow::processURLs(QList<QUrl> urls)
                 // format of url curseforge://install?addonId=IDHERE&fileId=IDHERE
                 // format of url binaryname://install?platform=curseforge&addonId=IDHERE&fileId=IDHERE
                 QUrlQuery query(url);
-                
+
                 // check if this is a binaryname:// url
                 if (url.scheme() == BuildConfig.LAUNCHER_APP_BINARY_NAME) {
                     // check this is an curseforge platform request
@@ -1015,8 +1022,7 @@ void MainWindow::processURLs(QList<QUrl> urls)
                     receivedData.insert(it->first, it->second);
                 emit APPLICATION->oauthReplyRecieved(receivedData);
                 continue;
-            } else if ((url.scheme() == "prismlauncher" || url.scheme() == BuildConfig.LAUNCHER_APP_BINARY_NAME)
-                        && isExternalURLImport) {
+            } else if ((url.scheme() == "prismlauncher" || url.scheme() == BuildConfig.LAUNCHER_APP_BINARY_NAME) && isExternalURLImport) {
                 // PrismLauncher URL protocol modpack import
                 // works for any prism fork
                 // preferred import format: prismlauncher://import?url=ENCODED
@@ -1035,7 +1041,6 @@ void MainWindow::processURLs(QList<QUrl> urls)
 
                 // alternative import format: prismlauncher://import/ENCODED
                 if (encodedTarget.isEmpty()) {
-
                     QString p = path;
 
                     if (p.startsWith("/import/", Qt::CaseInsensitive)) {
@@ -1050,12 +1055,9 @@ void MainWindow::processURLs(QList<QUrl> urls)
                 }
 
                 if (encodedTarget.isEmpty()) {
-                    CustomMessageBox::selectable(
-                        this,
-                        tr("Error"),
-                        tr("Invalid import link: missing 'url' parameter."),
-                        QMessageBox::Critical
-                    )->show();
+                    CustomMessageBox::selectable(this, tr("Error"), tr("Invalid import link: missing 'url' parameter."),
+                                                 QMessageBox::Critical)
+                        ->show();
                     continue;
                 }
 
@@ -1065,23 +1067,15 @@ void MainWindow::processURLs(QList<QUrl> urls)
 
                 // Validate: only allow http(s)
                 if (!target.isValid() || (target.scheme() != "https" && target.scheme() != "http")) {
-                    CustomMessageBox::selectable(
-                        this,
-                        tr("Error"),
-                        tr("Invalid import link: URL must be http(s)."),
-                        QMessageBox::Critical
-                    )->show();
+                    CustomMessageBox::selectable(this, tr("Error"), tr("Invalid import link: URL must be http(s)."), QMessageBox::Critical)
+                        ->show();
                     continue;
                 }
 
                 const auto res = QMessageBox::question(
-                    this,
-                    tr("Install modpack"),
-                    tr("Do you want to download and import a modpack from:\n%1\n\nURL:\n%2")
-                        .arg(target.host(), target.toString()),
-                    QMessageBox::Yes | QMessageBox::No,
-                    QMessageBox::Yes
-                );
+                    this, tr("Install modpack"),
+                    tr("Do you want to download and import a modpack from:\n%1\n\nURL:\n%2").arg(target.host(), target.toString()),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
                 if (res != QMessageBox::Yes) {
                     continue;
                 }
@@ -1124,6 +1118,11 @@ void MainWindow::processURLs(QList<QUrl> urls)
 
         auto localFileName = QDir::toNativeSeparators(local_url.toLocalFile());
         QFileInfo localFileInfo(localFileName);
+
+        if (localFileName.isEmpty() || !localFileInfo.exists()) {
+            qDebug() << "Ignoring invalid path" << localFileName;
+            continue;
+        }
 
         auto type = ResourceUtils::identify(localFileInfo);
 
@@ -1393,6 +1392,16 @@ void MainWindow::on_actionEditInstance_triggered()
                                      tr("This instance is not editable. It may be broken, invalid, or too old. Check logs for details."),
                                      QMessageBox::Critical)
             ->show();
+    }
+}
+
+void MainWindow::on_actionManageSkins_triggered()
+{
+    auto account = APPLICATION->accounts()->defaultAccount();
+
+    if (account && (account->accountType() == AccountType::MSA) && !account->isActive()) {
+        SkinManageDialog dialog(this, account);
+        dialog.exec();
     }
 }
 
