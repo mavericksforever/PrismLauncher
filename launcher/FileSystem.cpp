@@ -687,12 +687,12 @@ bool deleteContents(const QString& path)
 
     bool ret = true;
 
-    for (const auto& entry : fs::directory_iterator(StringUtils::toStdString(path))) {
-        std::error_code err;
-
-        fs::remove_all(entry.path(), err);
-        if (err.value() != 0) {
-            qWarning().nospace() << "Could not delete directory entry " << entry.path() << ": " << QString::fromStdString(err.message());
+    // NOTE: std::filesystem is unavailable on the macOS 10.9 deployment target (its libc++
+    // symbols were only introduced in 10.15), so this is implemented with Qt instead of the
+    // fs::directory_iterator / fs::remove_all that upstream uses here.
+    const auto entries = QDir(path).entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden | QDir::System);
+    for (const auto& entry : entries) {
+        if (!deletePath(entry.absoluteFilePath())) {
             ret = false;
         }
     }

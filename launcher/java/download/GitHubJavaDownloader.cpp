@@ -21,8 +21,9 @@ GitHubMajorVersionList::GitHubMajorVersionList(QString owner, QString repo, QObj
 {
 }
 
-Task::Ptr GitHubMajorVersionList::getLoadTask()
+Task::Ptr GitHubMajorVersionList::getLoadTask(bool forceReload)
 {
+    Q_UNUSED(forceReload)
     auto url = QString("https://api.github.com/repos/%1/%2/releases").arg(m_owner, m_repo);
     auto job = makeShared<NetJob>("GitHub Java Releases", APPLICATION->network());
     auto [action, response] = Net::Download::makeByteArray(QUrl(url));

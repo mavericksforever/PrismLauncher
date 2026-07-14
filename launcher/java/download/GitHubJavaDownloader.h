@@ -22,7 +22,7 @@ class GitHubMajorVersionList : public BaseVersionList {
    public:
     GitHubMajorVersionList(QString owner, QString repo, QObject* parent = nullptr);
 
-    Task::Ptr getLoadTask() override;
+    Task::Ptr getLoadTask(bool forceReload = false) override;
     bool isLoaded() override { return m_loaded; }
     const BaseVersion::Ptr at(int i) const override { return m_majors.at(i); }
     int count() const override { return m_majors.count(); }
@@ -49,7 +49,7 @@ class GitHubReleaseVersionList : public BaseVersionList {
    public:
     explicit GitHubReleaseVersionList(GitHubMajorVersionPtr major, QObject* parent = nullptr);
 
-    Task::Ptr getLoadTask() override { return nullptr; }
+    Task::Ptr getLoadTask(bool forceReload = false) override { return nullptr; }
     bool isLoaded() override { return true; }
     const BaseVersion::Ptr at(int i) const override { return m_major->releases.at(i); }
     int count() const override { return m_major->releases.count(); }
