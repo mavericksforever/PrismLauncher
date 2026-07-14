@@ -111,16 +111,17 @@ jobs:
 
       - name: Configure PrismLauncher
         run: |
-          # -Wl,-no_weak_imports fails the link the moment our own code references a
-          # symbol newer than the 10.9 deployment target that macports-legacy-support
-          # doesn't backfill. This is the hard gate; scripts/check-mavericks-symbols.sh
-          # (run after Deploy) additionally scans the bundled Qt frameworks/plugins.
-          # If a legitimate weak import ever trips this, drop the flag and rely on the
-          # scanner (which supports an allowlist/baseline).
+          # We do NOT use -Wl,-no_weak_imports: it's a blanket ban that also trips on
+          # legitimate, runtime-guarded weak imports pulled in by our dependencies and
+          # the toolchain — libarchive's clonefile/readlinkat/linkat, libdispatch's
+          # dispatch_once_f, and clang's own __availability_version_check (@available).
+          # These resolve to null on 10.9 and are guarded or backfilled, and the
+          # assembled .app is verified to run on real 10.9. The weak-import safety net
+          # is scripts/check-mavericks-symbols.sh (run after Deploy), which scans the
+          # binary + bundled Qt frameworks/plugins against an allowlist/baseline.
           cmake -S . -B build -G Ninja \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.DEPLOYMENT_TARGET }} \
-            -DCMAKE_EXE_LINKER_FLAGS="-Wl,-no_weak_imports" \
             -DCMAKE_INSTALL_PREFIX=/tmp/prismlauncher \
             -DCMAKE_PREFIX_PATH="/tmp/qt6-mavericks;/tmp/deps;$(brew --prefix extra-cmake-modules)" \
             -DQT_HOST_PATH=/tmp/qt6-host \
